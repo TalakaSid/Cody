@@ -1,0 +1,67 @@
+---
+---
+<div id="preloader">
+  <svg class="preloader__ring" viewBox="0 0 100 100" width="88" height="88">
+    <circle class="preloader__track" cx="50" cy="50" r="45" />
+    <circle class="preloader__fill" cx="50" cy="50" r="45" />
+  </svg>
+  <span class="preloader__pct">0%</span>
+  <span class="preloader__label">loading the reel</span>
+</div>
+
+<style>
+  #preloader {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+    background: var(--black);
+    transition: opacity 0.6s ease;
+  }
+
+  #preloader.is-done {
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .preloader__ring {
+    transform: rotate(-90deg);
+  }
+
+  .preloader__track,
+  .preloader__fill {
+    fill: none;
+    stroke-width: 1.5;
+  }
+
+  .preloader__track {
+    stroke: rgba(255, 255, 255, 0.12);
+  }
+
+  .preloader__fill {
+    stroke: var(--white);
+    stroke-linecap: round;
+    stroke-dasharray: 283;
+    stroke-dashoffset: 283;
+    filter: drop-shadow(0 0 6px rgba(255, 255, 255, 0.6));
+    transition: stroke-dashoffset 0.15s linear;
+  }
+
+  .preloader__pct {
+    font-variant-numeric: tabular-nums;
+    font-size: 0.9rem;
+    letter-spacing: 0.08em;
+    color: var(--white);
+  }
+
+  .preloader__label {
+    font-size: 0.7rem;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+  }
+</style>

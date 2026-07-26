@@ -1,0 +1,19 @@
+{
+  "name": "cody",
+  "type": "module",
+  "version": "0.0.1",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "astro": "astro"
+  },
+  "dependencies": {
+    "animejs": "^4.5.0",
+    "astro": "^7.1.3",
+    "lenis": "^1.3.25"
+  }
+}

@@ -1,0 +1,72 @@
+---
+---
+<section class="scene scene--contact" data-reveal>
+  <div class="scene__inner">
+    <span class="scene__kicker" data-reveal-text>Let's make something</span>
+    <h2 class="scene__title" data-reveal-text>Start a project</h2>
+    <a class="scene__cta" href="mailto:hello@codyashworth.com" data-reveal-text>
+      hello@codyashworth.com
+    </a>
+    <div class="scene__socials" data-reveal-text>
+      <a href="#">Instagram</a>
+      <a href="#">Vimeo</a>
+      <a href="#">LinkedIn</a>
+    </div>
+  </div>
+</section>
+
+<style>
+  .scene--contact {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+  }
+
+  .scene--contact .scene__inner {
+    padding: 0 1.5rem;
+  }
+
+  .scene__kicker {
+    display: block;
+    font-size: 0.75rem;
+    letter-spacing: 0.3em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    margin-bottom: 1rem;
+  }
+
+  .scene__title {
+    font-size: clamp(2.25rem, 6vw, 4.5rem);
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    margin: 0;
+  }
+
+  .scene__cta {
+    display: inline-block;
+    margin-top: 2rem;
+    font-size: clamp(1.1rem, 2.4vw, 1.5rem);
+    color: var(--white);
+    text-decoration: none;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.4);
+  }
+
+  .scene__socials {
+    margin-top: 2.5rem;
+    display: flex;
+    gap: 1.5rem;
+    justify-content: center;
+  }
+
+  .scene__socials a {
+    color: var(--ink-soft);
+    text-decoration: none;
+    font-size: 0.85rem;
+    letter-spacing: 0.05em;
+  }
+
+  .scene__socials a:hover {
+    color: var(--white);
+  }
+</style>

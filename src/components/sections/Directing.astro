@@ -1,0 +1,64 @@
+---
+---
+<section class="scene scene--directing" data-reveal>
+  <svg class="scene__lines" viewBox="0 0 1000 1000" preserveAspectRatio="none">
+    <path data-reveal-line d="M 0 320 L 340 320 L 420 260" />
+    <path data-reveal-line d="M 0 620 L 300 620 L 400 700" />
+  </svg>
+  <div class="scene__inner">
+    <span class="scene__kicker" data-reveal-text>Directing</span>
+    <h2 class="scene__title" data-reveal-text>Every frame, composed on purpose.</h2>
+    <p class="scene__body" data-reveal-text>
+      A decade behind the viewfinder — commercial spots, brand films, and music videos
+      shaped by deliberate light, blocking, and rhythm.
+    </p>
+  </div>
+</section>
+
+<style>
+  .scene--directing {
+    display: flex;
+    align-items: center;
+  }
+
+  .scene--directing .scene__inner {
+    max-width: 30rem;
+    padding: 0 clamp(1.5rem, 6vw, 5rem);
+  }
+
+  .scene__lines {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    stroke: var(--white);
+    stroke-width: 1;
+    fill: none;
+    filter: drop-shadow(0 0 4px rgba(255, 255, 255, 0.7));
+    opacity: 0.5;
+  }
+
+  .scene__kicker {
+    display: block;
+    font-size: 0.75rem;
+    letter-spacing: 0.3em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    margin-bottom: 1rem;
+  }
+
+  .scene__title {
+    font-size: clamp(2rem, 4.5vw, 3.25rem);
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    line-height: 1.1;
+    margin: 0;
+  }
+
+  .scene__body {
+    margin-top: 1.5rem;
+    max-width: 40ch;
+    color: rgba(255, 255, 255, 0.72);
+    line-height: 1.6;
+  }
+</style>

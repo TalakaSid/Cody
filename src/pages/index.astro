@@ -1,0 +1,19 @@
+---
+import Layout from '../layouts/Layout.astro';
+import Preloader from '../components/Preloader.astro';
+import Hero from '../components/sections/Hero.astro';
+import Directing from '../components/sections/Directing.astro';
+import MotionGraphics from '../components/sections/MotionGraphics.astro';
+import Contact from '../components/sections/Contact.astro';
+---
+<Layout title="Cody Ashworth — Director & Editor">
+  <Preloader />
+  <canvas id="scrubber"></canvas>
+  <main>
+    <Hero />
+    <Directing />
+    <MotionGraphics />
+    <Contact />
+  </main>
+  <script src="../scripts/main.js"></script>
+</Layout>

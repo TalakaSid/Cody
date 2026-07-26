@@ -1,0 +1,87 @@
+---
+const reel = [
+  { label: 'Brand Film — Solstice', href: '#' },
+  { label: 'Title Sequence — Aftertaste', href: '#' },
+  { label: 'Campaign — Northline', href: '#' },
+];
+---
+<section class="scene scene--motion" data-reveal>
+  <svg class="scene__lines" viewBox="0 0 1000 1000" preserveAspectRatio="none">
+    <path data-reveal-line d="M 1000 300 L 660 300 L 600 360" />
+    <path data-reveal-line d="M 1000 560 L 700 560 L 630 500" />
+  </svg>
+  <div class="scene__inner">
+    <span class="scene__kicker" data-reveal-text>Motion Graphics &amp; Editing</span>
+    <h2 class="scene__title" data-reveal-text>Cut, graded, and finished in-house.</h2>
+    <ul class="scene__reel">
+      {reel.map((item) => (
+        <li data-reveal-text><a href={item.href}>{item.label}</a></li>
+      ))}
+    </ul>
+  </div>
+</section>
+
+<style>
+  .scene--motion {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+  }
+
+  .scene--motion .scene__inner {
+    max-width: 30rem;
+    padding: 0 clamp(1.5rem, 6vw, 5rem);
+    text-align: right;
+  }
+
+  .scene__lines {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    stroke: var(--white);
+    stroke-width: 1;
+    fill: none;
+    filter: drop-shadow(0 0 4px rgba(255, 255, 255, 0.7));
+    opacity: 0.5;
+  }
+
+  .scene__kicker {
+    display: block;
+    font-size: 0.75rem;
+    letter-spacing: 0.3em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    margin-bottom: 1rem;
+  }
+
+  .scene__title {
+    font-size: clamp(2rem, 4.5vw, 3.25rem);
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    line-height: 1.1;
+    margin: 0;
+  }
+
+  .scene__reel {
+    list-style: none;
+    margin: 1.75rem 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .scene__reel a {
+    color: rgba(255, 255, 255, 0.78);
+    text-decoration: none;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.25);
+    padding-bottom: 2px;
+    transition: color 0.2s, border-color 0.2s;
+  }
+
+  .scene__reel a:hover {
+    color: var(--white);
+    border-color: var(--white);
+  }
+</style>

@@ -1,0 +1,92 @@
+:root {
+  --black: #000000;
+  --white: #ffffff;
+  --ink-soft: rgba(255, 255, 255, 0.6);
+  --font-display: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--black);
+  color: var(--white);
+  font-family: var(--font-display);
+  overscroll-behavior: none;
+}
+
+/* Preloader holds the page still until every frame is cached. */
+html.is-loading,
+html.is-loading body {
+  height: 100%;
+  overflow: hidden;
+}
+
+img {
+  max-width: 100%;
+  display: block;
+}
+
+#scrubber {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 0;
+}
+
+.scene {
+  position: relative;
+  z-index: 10;
+  /* 160vh x 4 sections =~ 640vh of scroll across 350 frame steps, instead of
+     400vh — lowers scroll-per-frame density so the frame source's fetch/evict
+     windows have more real time to work with per index step. */
+  min-height: 160vh;
+  pointer-events: none;
+}
+
+.scene a,
+.scene button {
+  pointer-events: auto;
+}
+
+.word {
+  display: inline-block;
+  opacity: 0;
+  /* will-change is applied/cleared per-animation in reveals.js, not statically
+     here — a static rule would pin a compositor layer per word forever. */
+}
+
+[data-reveal-line] {
+  opacity: 0;
+}
+
+/* Film grain: SVG feTurbulence noise, tiled and stepped — no image asset needed. */
+.grain {
+  position: fixed;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+  opacity: 0.05;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  animation: grain-shift 8s steps(8) infinite;
+}
+
+@keyframes grain-shift {
+  0% { transform: translate(0, 0); }
+  20% { transform: translate(-2%, 2%); }
+  40% { transform: translate(2%, -2%); }
+  60% { transform: translate(-2%, -2%); }
+  80% { transform: translate(2%, 2%); }
+  100% { transform: translate(0, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .grain { animation: none; }
+}
