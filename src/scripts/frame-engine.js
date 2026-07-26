@@ -9,25 +9,40 @@
 // to draw at every scroll position, so the ring buffer below can be aggressive
 // about eviction without ever risking a blank canvas.
 //
-// Layer 2 — the sharp ring: a Map<index, ImageBitmap> for the tier-appropriate
-// resolution (720p mobile / 1080p desktop), fetched around the current scroll
-// position and evicted once out of range.
+// Layer 2 — the sharp ring: a Map<index, ImageBitmap> at 1920x1080, fetched
+// around the current scroll position and evicted once out of range. Both
+// device classes get full 1080p now — quality takes priority, and since the
+// ring bounds memory regardless of source resolution (unlike a full preload),
+// serving 1080p to phones doesn't reintroduce the memory risk a full-preload
+// approach would have. `id` still distinguishes desktop/mobile for tuning
+// ring size / concurrency / DPR to real device capability.
 const SHARP_COUNT = 527;
 const PROXY_COUNT = 176;
 
-const RING_CAP = { desktop: 26, mobile: 32 };
-const CONCURRENCY = { desktop: 6, mobile: 4 };
+const RING_CAP = { desktop: 48, mobile: 36 };
+const CONCURRENCY = { desktop: 8, mobile: 5 };
 const FETCH_BEHIND = 6;
+// Minimum forward prefetch, in frames — this was 10, which is only ~150ms of
+// buffer at a brisk-but-deliberate scroll speed. Too thin: the ring couldn't
+// stay ahead during ordinary slow scrolling (not just fast flicks), so
+// frames kept arriving just as the playhead reached them, forcing a
+// proxy-fallback + crossfade on nearly every new frame — which reads as
+// choppiness, not the occasional graceful degradation it was meant to be.
+const MIN_AHEAD = 24;
 const MIN_AGE_MS = 400;
 const EVICT_THROTTLE_MS = 200;
 const HYSTERESIS_GAP = 10;
-const FADE_MS = 120;
-const FADE_MAX_VELOCITY = 2; // frames/sec — only crossfade proxy->sharp near-stationary
+// Short and gated to near-total-stop: a visible dissolve firing repeatedly
+// while the user is still (slowly) scrolling reads as an inconsistent,
+// unsettled motion — worse than a rare, brief pop. Wider prefetch above
+// means this should now rarely even trigger outside first-visit-to-a-region.
+const FADE_MS = 70;
+const FADE_MAX_VELOCITY = 0.75; // frames/sec — near-total-stop only
 
 export function tierFor(width) {
   return width >= 1024
     ? { id: 'desktop', dir: '1080p', width: 1920, height: 1080 }
-    : { id: 'mobile', dir: '720p', width: 1280, height: 720 };
+    : { id: 'mobile', dir: '1080p', width: 1920, height: 1080 };
 }
 
 const pad3 = (i) => String(i).padStart(3, '0');
@@ -123,7 +138,7 @@ export function createFrameEngine({ tier, proxyOnly = false }) {
     if (proxyOnly) return Promise.resolve();
     const idx = sharpIndexFor(0);
     const lo = Math.max(1, idx - FETCH_BEHIND);
-    const hi = Math.min(SHARP_COUNT, idx + 24);
+    const hi = Math.min(SHARP_COUNT, idx + MIN_AHEAD);
     const total = hi - lo + 1;
     let done = 0;
     const jobs = [];
@@ -154,7 +169,7 @@ export function createFrameEngine({ tier, proxyOnly = false }) {
     }
 
     const ringCap = RING_CAP[tier.id];
-    const ahead = Math.max(10, Math.min(ringCap - FETCH_BEHIND - 2, Math.round(absV * 0.35)));
+    const ahead = Math.max(MIN_AHEAD, Math.min(ringCap - FETCH_BEHIND - 2, Math.round(absV * 0.35)));
     const dir = vFrames >= 0 ? 1 : -1;
     const lo = Math.max(1, idx - (dir > 0 ? FETCH_BEHIND : ahead));
     const hi = Math.min(SHARP_COUNT, idx + (dir > 0 ? ahead : FETCH_BEHIND));
@@ -284,5 +299,8 @@ export function applyCanvasSize(canvas, ctx, cssW, cssH, dpr, pxW, pxH) {
 }
 
 export function dprCapFor(tierId) {
-  return tierId === 'desktop' ? 1.3 : 1.15;
+  // Both tiers now serve the same 1920x1080 source, so the cap difference is
+  // about real GPU fill-rate headroom (desktop GPUs vs. phone GPUs), not
+  // source resolution anymore.
+  return tierId === 'desktop' ? 1.5 : 1.3;
 }
