@@ -1,4 +1,8 @@
-// Two-layer frame source for the scroll scrubber.
+// Isomorphic frame source + painter — no `window`/`document`/`Image` access,
+// so this same module runs unchanged inside a Worker (paint via OffscreenCanvas)
+// or on the main thread (fallback for browsers without
+// transferControlToOffscreen). Tier/viewport info is always passed in by the
+// caller, which is the only side that has DOM access.
 //
 // Layer 1 — the proxy spine: all PROXY_COUNT frames, small (854x480), loaded in
 // full up front and never evicted. Guarantees there is always something correct
@@ -7,13 +11,9 @@
 //
 // Layer 2 — the sharp ring: a Map<index, ImageBitmap> for the tier-appropriate
 // resolution (720p mobile / 1080p desktop), fetched around the current scroll
-// position and evicted once out of range. ImageBitmap (not <img>) so decode
-// happens off the main thread and eviction is a real, explicit `.close()`.
-//
-// 351 frames is the resampled length of the original 527-frame render (see
-// scripts that built public/frames/*), chosen to lower scroll-per-frame density.
-const SHARP_COUNT = 351;
-const PROXY_COUNT = 117;
+// position and evicted once out of range.
+const SHARP_COUNT = 527;
+const PROXY_COUNT = 176;
 
 const RING_CAP = { desktop: 26, mobile: 32 };
 const CONCURRENCY = { desktop: 6, mobile: 4 };
@@ -21,8 +21,10 @@ const FETCH_BEHIND = 6;
 const MIN_AGE_MS = 400;
 const EVICT_THROTTLE_MS = 200;
 const HYSTERESIS_GAP = 10;
+const FADE_MS = 120;
+const FADE_MAX_VELOCITY = 2; // frames/sec — only crossfade proxy->sharp near-stationary
 
-function tierFor(width) {
+export function tierFor(width) {
   return width >= 1024
     ? { id: 'desktop', dir: '1080p', width: 1920, height: 1080 }
     : { id: 'mobile', dir: '720p', width: 1280, height: 720 };
@@ -32,9 +34,14 @@ const pad3 = (i) => String(i).padStart(3, '0');
 const sharpPath = (dir, i) => `/frames/${dir}/frame_${pad3(i)}.webp`;
 const proxyPath = (i) => `/frames/proxy/frame_${pad3(i)}.webp`;
 
-export function createFrameSource({ proxyOnly = false } = {}) {
-  let tier = tierFor(window.innerWidth);
+async function fetchBitmap(url, signal) {
+  const res = await fetch(url, { signal });
+  if (!res.ok) throw new Error('bad status');
+  const blob = await res.blob();
+  return createImageBitmap(blob);
+}
 
+export function createFrameEngine({ tier, proxyOnly = false }) {
   const proxyImgs = new Array(PROXY_COUNT);
 
   let ring = new Map(); // index -> { bitmap, ts }
@@ -54,28 +61,21 @@ export function createFrameSource({ proxyOnly = false } = {}) {
   }
 
   function loadSpine(onProgress) {
-    // Loaded regardless of proxyOnly — it's the fallback layer, or the only layer.
     const BAIL_MS = 8000;
     let done = 0;
     const jobs = [];
     for (let i = 1; i <= PROXY_COUNT; i++) {
-      const img = new Image();
-      img.decoding = 'async';
       jobs.push(
-        new Promise((resolve) => {
-          const finish = () => {
+        fetchBitmap(proxyPath(i))
+          .then((bitmap) => {
+            proxyImgs[i - 1] = bitmap;
+          })
+          .catch(() => {})
+          .finally(() => {
             done++;
             onProgress?.(done, PROXY_COUNT);
-            resolve();
-          };
-          img.onload = () => {
-            (img.decode ? img.decode().catch(() => {}) : Promise.resolve()).finally(finish);
-          };
-          img.onerror = finish;
-        })
+          })
       );
-      img.src = proxyPath(i);
-      proxyImgs[i - 1] = img;
     }
     return Promise.race([Promise.all(jobs), new Promise((r) => setTimeout(r, BAIL_MS))]);
   }
@@ -86,10 +86,7 @@ export function createFrameSource({ proxyOnly = false } = {}) {
     inFlight.set(index, controller);
     const t0 = performance.now();
     try {
-      const res = await fetch(sharpPath(tier.dir, index), { signal: controller.signal });
-      if (!res.ok) throw new Error('bad status');
-      const blob = await res.blob();
-      const bitmap = await createImageBitmap(blob);
+      const bitmap = await fetchBitmap(sharpPath(tier.dir, index), controller.signal);
       const dt = (performance.now() - t0) / 1000;
       if (dt > 0.001) capacity = capacity * 0.7 + (1 / dt) * 0.3;
       ring.set(index, { bitmap, ts: performance.now() });
@@ -189,8 +186,6 @@ export function createFrameSource({ proxyOnly = false } = {}) {
     const idx = sharpIndexFor(p);
     if (!proxyOnly) {
       if (ring.has(idx)) return { img: ring.get(idx).bitmap, isSharp: true, index: idx };
-      // Nearest available sharp frame, preferring the trailing (already-seen) side —
-      // a stale frame reads as latency, a future one reads as a jump-then-back.
       for (let d = 1; d <= 8; d++) {
         const behind = idx - d;
         const ahead = idx + d;
@@ -199,9 +194,6 @@ export function createFrameSource({ proxyOnly = false } = {}) {
       }
     }
     const pIdx = proxyIndexFor(p);
-    // `index` is always in sharp-space — it's the position identity scrubber.js
-    // uses to detect "this exact spot just got sharp", regardless of which
-    // layer actually supplied the pixels.
     return { img: proxyImgs[pIdx - 1], isSharp: false, index: idx };
   }
 
@@ -210,10 +202,8 @@ export function createFrameSource({ proxyOnly = false } = {}) {
   }
 
   let switching = false;
-  function checkTier() {
-    if (proxyOnly || switching) return;
-    const next = tierFor(window.innerWidth);
-    if (next.id === tier.id) return;
+  function setTier(next) {
+    if (proxyOnly || switching || next.id === tier.id) return;
     switching = true;
     const oldRing = ring;
     ring = new Map();
@@ -238,6 +228,61 @@ export function createFrameSource({ proxyOnly = false } = {}) {
     update,
     get,
     onReady,
-    checkTier,
+    setTier,
   };
+}
+
+// Cover-fit draw with a proxy->sharp crossfade, shared by the worker and the
+// main-thread fallback. `fadeState` is a mutable { from, dims, startTs } box
+// the caller keeps between calls (module-level state would leak across
+// multiple engines/canvases, e.g. during tests).
+export function drawFrame(ctx, vw, vh, frame, velocity, fadeState) {
+  const { img, isSharp, index } = frame;
+  if (!img) return;
+
+  const srcW = img.width;
+  const srcH = img.height;
+  const scale = Math.max(vw / srcW, vh / srcH);
+  const dw = srcW * scale;
+  const dh = srcH * scale;
+  const dx = (vw - dw) / 2;
+  const dy = (vh - dh) / 2;
+  const dims = { dx, dy, dw, dh };
+
+  const key = `${index}-${isSharp}`;
+  const becameSharp = isSharp && fadeState.lastKey === `${index}-false`;
+  if (becameSharp && Math.abs(velocity) < FADE_MAX_VELOCITY && fadeState.lastImg) {
+    fadeState.from = fadeState.lastImg;
+    fadeState.fromDims = fadeState.lastDims;
+    fadeState.startTs = performance.now();
+  }
+
+  if (fadeState.from && performance.now() - fadeState.startTs < FADE_MS) {
+    const t = (performance.now() - fadeState.startTs) / FADE_MS;
+    ctx.globalAlpha = 1;
+    ctx.drawImage(fadeState.from, fadeState.fromDims.dx, fadeState.fromDims.dy, fadeState.fromDims.dw, fadeState.fromDims.dh);
+    ctx.globalAlpha = t;
+    ctx.drawImage(img, dx, dy, dw, dh);
+    ctx.globalAlpha = 1;
+  } else {
+    fadeState.from = null;
+    ctx.drawImage(img, dx, dy, dw, dh);
+  }
+
+  fadeState.lastKey = key;
+  fadeState.lastImg = img;
+  fadeState.lastDims = dims;
+}
+
+export function applyCanvasSize(canvas, ctx, cssW, cssH, dpr, pxW, pxH) {
+  canvas.width = pxW ?? Math.round(cssW * dpr);
+  canvas.height = pxH ?? Math.round(cssH * dpr);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.scale(dpr, dpr);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+}
+
+export function dprCapFor(tierId) {
+  return tierId === 'desktop' ? 1.3 : 1.15;
 }

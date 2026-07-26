@@ -1,4 +1,4 @@
-import { animate, stagger, svg, text } from 'animejs';
+import { animate, stagger, svg, splitText } from 'animejs';
 
 // Native IntersectionObserver drives the trigger; anime.js only does the motion.
 export function initReveals() {
@@ -32,7 +32,7 @@ export function initReveals() {
         el.style.opacity = '1';
         return;
       }
-      const split = text.split(el, { words: { class: 'word' } });
+      const split = splitText(el, { words: { class: 'word' } });
       split.words.forEach((w) => (w.style.willChange = 'transform, opacity' + (skipBlur ? '' : ', filter')));
       animate(split.words, {
         opacity: [0, 1],
