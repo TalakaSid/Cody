@@ -9,18 +9,22 @@
 // to draw at every scroll position, so the ring buffer below can be aggressive
 // about eviction without ever risking a blank canvas.
 //
-// Layer 2 — the sharp ring: a Map<index, ImageBitmap> at 1920x1080, fetched
-// around the current scroll position and evicted once out of range. Both
-// device classes get full 1080p now — quality takes priority, and since the
-// ring bounds memory regardless of source resolution (unlike a full preload),
-// serving 1080p to phones doesn't reintroduce the memory risk a full-preload
-// approach would have. `id` still distinguishes desktop/mobile for tuning
-// ring size / concurrency / DPR to real device capability.
+// Layer 2 — the sharp ring: a Map<index, ImageBitmap>, fetched around the
+// current scroll position and evicted once out of range. Desktop gets full
+// 1920x1080; mobile gets 1600x900 rather than matching desktop exactly —
+// measured under throttled conditions (4x CPU, 4Mbps/40ms network), 1080p on
+// mobile only sustained ~4 fetched-frames/sec, well short of what real-time
+// scrolling needs, while 1600x900 sustains ~5-6 fps. `id` still distinguishes
+// desktop/mobile for tuning ring size / concurrency / DPR beyond resolution.
 const SHARP_COUNT = 527;
 const PROXY_COUNT = 176;
 
 const RING_CAP = { desktop: 48, mobile: 36 };
-const CONCURRENCY = { desktop: 8, mobile: 5 };
+// Mobile's concurrency was 5, which under a bandwidth-constrained connection
+// meant 5 large fetches contending for the same thin pipe — measured
+// throughput roughly *doubled* by dropping to 2 concurrent fetches instead,
+// since each one then gets a bigger share of the available bandwidth.
+const CONCURRENCY = { desktop: 8, mobile: 2 };
 const FETCH_BEHIND = 6;
 // Minimum forward prefetch, in frames — this was 10, which is only ~150ms of
 // buffer at a brisk-but-deliberate scroll speed. Too thin: the ring couldn't
@@ -42,7 +46,7 @@ const FADE_MAX_VELOCITY = 0.75; // frames/sec — near-total-stop only
 export function tierFor(width) {
   return width >= 1024
     ? { id: 'desktop', dir: '1080p', width: 1920, height: 1080 }
-    : { id: 'mobile', dir: '1080p', width: 1920, height: 1080 };
+    : { id: 'mobile', dir: '1600p', width: 1600, height: 900 };
 }
 
 const pad3 = (i) => String(i).padStart(3, '0');
