@@ -73,7 +73,6 @@ const FPS = 24; // matches the encode; only used to give WebCodecs well-formed i
 export function createVideoRing({ track, ring, ringCap }) {
   let decoder = null;
   let nextIndex = null; // next sample index (1-based) that will be fed to the decoder
-  const pending = []; // FIFO of indices matching decode() calls in flight, for the output callback
 
   // One decoder instance for the ring's whole lifetime — reset()+configure()
   // again on reseek rather than tearing down and recreating it, since a fresh
@@ -81,8 +80,19 @@ export function createVideoRing({ track, ring, ringCap }) {
   function configure() {
     if (!decoder) {
       decoder = new VideoDecoder({
+        // The index comes from the chunk's own timestamp, not the order
+        // outputs arrive in. decoder.reset() isn't guaranteed to synchronously
+        // cancel every in-flight decode, so a frame queued right before a
+        // reseek can still deliver its output afterward, interleaved with the
+        // new decode's outputs. A position-based FIFO would hand that late
+        // arrival's pixels to whatever index was next in the (by-then
+        // different) queue — a real, correctly-decoded frame silently landing
+        // one or more slots away from where it belongs. Every chunk we feed
+        // carries its true index as `timestamp = index/FPS` (below), and that
+        // travels with the frame through decode, so reading it back here is
+        // correct regardless of arrival order.
         output(frame) {
-          const idx = pending.shift();
+          const idx = Math.round((frame.timestamp * FPS) / 1e6);
           const prev = ring.get(idx);
           if (prev) prev.bitmap.close();
           ring.set(idx, { bitmap: frame, ts: performance.now() });
@@ -118,12 +128,10 @@ export function createVideoRing({ track, ring, ringCap }) {
         data: s.data,
       });
       decoder.decode(chunk);
-      pending.push(nextIndex);
     }
   }
 
   function reseek(lo, hi) {
-    pending.length = 0;
     configure();
     feedFrom(nearestKeyframeAtOrBefore(lo), hi);
   }
