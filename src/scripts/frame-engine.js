@@ -18,11 +18,14 @@ import { supportsWebCodecs, loadVideoTrack, createVideoRing } from './video-sour
 // mobile only sustained ~4 fetched-frames/sec, well short of what real-time
 // scrolling needs, while 1600x900 sustains ~5-6 fps. `id` still distinguishes
 // desktop/mobile for tuning ring size / concurrency / DPR beyond resolution.
-// Thinned from the source's 527 frames to 264 (every other frame): halves
-// required fetch+decode throughput, which measurement showed was the actual
-// bottleneck on constrained connections (not paint/scheduling). The
-// proxy->sharp crossfade already covers the larger per-step visual jump.
-const SHARP_COUNT = 264;
+// Full 527-frame density. This was thinned to 264 at one point to halve
+// fetch+decode throughput on constrained connections — but that made the two
+// continuous-camera-motion scenes (a sustained orbit, a slow pull-back) look
+// choppy on real devices, since thinning cuts hardest exactly where the
+// camera never stops moving. The video-decode path (video-source.js) made
+// that bandwidth trade unnecessary — full density compresses smaller as H.264
+// than the thinned tier ever did as WebP — so this reverted back to full.
+const SHARP_COUNT = 527;
 const PROXY_COUNT = 176;
 
 const RING_CAP = { desktop: 48, mobile: 36 };
@@ -67,18 +70,21 @@ async function fetchBitmap(url, signal) {
   return { bitmap, bytes: blob.size };
 }
 
-// Average sharp-frame size measured from the actual built tiers (13MB/264
-// frames desktop, 9.5MB/264 mobile) x a 20fps sustain target — the minimum
-// arrival rate that doesn't read as choppy. `saveData` (checked by the
-// caller) only catches users who opted into Data Saver; it misses Safari/iOS
-// (no Network Information API at all) and ordinary-but-slow connections. This
-// measures the proxy spine's actual download speed as a connection-API-free
-// fallback signal for those cases.
+// Average per-frame WebP size x a 20fps sustain target — the minimum arrival
+// rate the *per-frame fetch* path needs to not read as choppy. Only applies
+// to the WebP fallback: the video path downloads one small file once, so its
+// bandwidth needs are unrelated to a sustained per-frame rate (see
+// webpBandwidthLimited below). `saveData` (checked by the caller) only
+// catches users who opted into Data Saver; it misses Safari/iOS (no Network
+// Information API at all) and ordinary-but-slow connections. This measures
+// the proxy spine's actual download speed as a connection-API-free fallback
+// signal for those cases.
 const SHARP_KBPS_FOR_SMOOTH = { desktop: 50 * 20, mobile: 37 * 20 };
 
 export function createFrameEngine({ tier, proxyOnly = false }) {
   const proxyImgs = new Array(PROXY_COUNT);
-  let forcedProxyOnly = proxyOnly;
+  let forcedProxyOnly = proxyOnly; // explicit signal (reduced-motion/saveData/2g) — disables video AND WebP
+  let webpBandwidthLimited = false; // measured-too-slow-for-sustained-fetch — disables WebP fallback only
 
   let ring = new Map(); // index -> { bitmap, ts } — bitmap is an ImageBitmap (WebP path) or VideoFrame (video path); both share close()
   let inFlight = new Map(); // index -> AbortController
@@ -122,7 +128,7 @@ export function createFrameEngine({ tier, proxyOnly = false }) {
       const elapsed = (performance.now() - t0) / 1000;
       if (elapsed < 0.05 || totalBytes === 0) return; // too fast/small to trust the measurement
       const kbps = totalBytes / 1024 / elapsed;
-      if (kbps < SHARP_KBPS_FOR_SMOOTH[tier.id]) forcedProxyOnly = true;
+      if (kbps < SHARP_KBPS_FOR_SMOOTH[tier.id]) webpBandwidthLimited = true;
     });
   }
 
@@ -143,7 +149,7 @@ export function createFrameEngine({ tier, proxyOnly = false }) {
   }
 
   async function fetchSharp(index) {
-    if (forcedProxyOnly || ring.has(index) || inFlight.has(index)) return;
+    if (forcedProxyOnly || webpBandwidthLimited || ring.has(index) || inFlight.has(index)) return;
     const controller = new AbortController();
     inFlight.set(index, controller);
     const t0 = performance.now();
@@ -187,7 +193,15 @@ export function createFrameEngine({ tier, proxyOnly = false }) {
     const lo = Math.max(1, idx - FETCH_BEHIND);
     const hi = Math.min(SHARP_COUNT, idx + MIN_AHEAD);
 
-    return startVideoSource().then(() => {
+    // startVideoSource() downloads the whole tier file before it can decode
+    // anything — on a slow connection that can take much longer than a
+    // WebP ring's initial ~30-frame window ever did. Race it too: if it's not
+    // ready in time, fall through to WebP/proxy for now. The fetch+demux
+    // keeps running in the background regardless (it's not aborted), so
+    // videoRing still gets set once it finishes, and the next update() tick
+    // picks it up automatically — no explicit "upgrade" step needed.
+    const videoSourceReady = startVideoSource();
+    return Promise.race([videoSourceReady, new Promise((r) => setTimeout(r, 6000))]).then(() => {
       if (videoRing) {
         onProgress?.(0, 1);
         videoRing.ensure(lo, hi, idx);
@@ -200,6 +214,7 @@ export function createFrameEngine({ tier, proxyOnly = false }) {
             onProgress?.(1, 1);
           });
       }
+      if (webpBandwidthLimited) return Promise.resolve();
       const total = hi - lo + 1;
       let done = 0;
       const jobs = [];
@@ -243,6 +258,7 @@ export function createFrameEngine({ tier, proxyOnly = false }) {
       evict(keepLo, keepHi);
       return;
     }
+    if (webpBandwidthLimited) return;
 
     for (const [i, controller] of inFlight) {
       if (i < keepLo || i > keepHi) {
@@ -312,8 +328,15 @@ export function createFrameEngine({ tier, proxyOnly = false }) {
     // by having the user read numbers off an on-screen overlay, since there's
     // no way to attach devtools to their phone remotely.
     get debugInfo() {
+      const path = forcedProxyOnly
+        ? 'proxy-only'
+        : videoRing
+          ? 'video'
+          : webpBandwidthLimited
+            ? 'proxy-only(bw)'
+            : 'webp';
       return {
-        path: forcedProxyOnly ? 'proxy-only' : videoRing ? 'video' : 'webp',
+        path,
         ringSize: ring.size,
         inFlight: inFlight.size,
         capacity: Math.round(capacity),
