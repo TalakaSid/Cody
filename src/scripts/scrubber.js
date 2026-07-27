@@ -5,12 +5,13 @@ import { tierFor, dprCapFor, createFrameEngine, drawFrame, applyCanvasSize } fro
 // drawing never competes with the anime.js reveals (or anything else) for
 // main-thread time. Falls back to painting directly on the main thread with
 // the exact same frame-engine.js logic when it doesn't.
-export function initScrubber({ proxyOnly, onSpineProgress, onWindowProgress, onReady }) {
+export function initScrubber({ proxyOnly, onSpineProgress, onWindowProgress, onReady, onDebug }) {
   const canvas = document.getElementById('scrubber');
   let tier = tierFor(window.innerWidth);
   let dpr = Math.min(window.devicePixelRatio || 1, dprCapFor(tier.id));
   let vw = window.innerWidth;
   let vh = window.innerHeight;
+  const debug = new URLSearchParams(location.search).has('debug');
 
   const supportsWorker = 'transferControlToOffscreen' in canvas && typeof OffscreenCanvas !== 'undefined';
 
@@ -28,10 +29,11 @@ export function initScrubber({ proxyOnly, onSpineProgress, onWindowProgress, onR
       if (msg.type === 'spineProgress') onSpineProgress(msg.loaded, msg.total);
       else if (msg.type === 'windowProgress') onWindowProgress(msg.loaded, msg.total);
       else if (msg.type === 'ready') onReady();
+      else if (msg.type === 'debug') onDebug?.(msg);
     };
     const { width, height } = measure();
     const offscreen = canvas.transferControlToOffscreen();
-    worker.postMessage({ type: 'init', canvas: offscreen, width, height, dpr, tier, proxyOnly }, [offscreen]);
+    worker.postMessage({ type: 'init', canvas: offscreen, width, height, dpr, tier, proxyOnly, debug }, [offscreen]);
   } else {
     const ctx = canvas.getContext('2d', { alpha: false });
     const engine = createFrameEngine({ tier, proxyOnly });
@@ -76,6 +78,7 @@ export function initScrubber({ proxyOnly, onSpineProgress, onWindowProgress, onR
   lenis.stop(); // stays locked until the preloader calls .start()
 
   let lastTime = 0;
+  let lastDebugPost = 0;
   function raf(time) {
     lenis.raf(time);
     const dt = lastTime ? (time - lastTime) / 1000 : 0;
@@ -85,8 +88,13 @@ export function initScrubber({ proxyOnly, onSpineProgress, onWindowProgress, onR
     if (worker) {
       worker.postMessage({ type: 'tick', p, dt });
     } else if (fallback) {
+      const t0 = debug ? performance.now() : 0;
       fallback.engine.update(p, dt);
       drawFrame(fallback.ctx, vw, vh, fallback.engine.get(p), fallback.engine.velocity, fallback.fadeState);
+      if (debug && time - lastDebugPost > 400) {
+        lastDebugPost = time;
+        onDebug?.({ tickMs: Math.round(performance.now() - t0), ...fallback.engine.debugInfo });
+      }
     }
     requestAnimationFrame(raf);
   }

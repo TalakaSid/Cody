@@ -308,6 +308,18 @@ export function createFrameEngine({ tier, proxyOnly = false }) {
     get velocity() {
       return vFrames;
     },
+    // Gated behind ?debug=1 in main.js — lets a real-device issue be diagnosed
+    // by having the user read numbers off an on-screen overlay, since there's
+    // no way to attach devtools to their phone remotely.
+    get debugInfo() {
+      return {
+        path: forcedProxyOnly ? 'proxy-only' : videoRing ? 'video' : 'webp',
+        ringSize: ring.size,
+        inFlight: inFlight.size,
+        capacity: Math.round(capacity),
+        velocity: Math.round(vFrames),
+      };
+    },
     loadSpine,
     primeWindow,
     update,

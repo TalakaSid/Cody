@@ -21,6 +21,17 @@ const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').match
 const saveData = navigator.connection?.saveData === true;
 const slowConnection = /2g/.test(navigator.connection?.effectiveType || '');
 
+// ?debug=1 shows a small on-screen overlay of the active frame-source path and
+// per-tick timing — for diagnosing real-device issues that can't be reproduced
+// locally (no way to attach devtools to someone else's phone remotely).
+let debugEl = null;
+if (new URLSearchParams(location.search).has('debug')) {
+  debugEl = document.createElement('div');
+  debugEl.style.cssText =
+    'position:fixed;bottom:8px;left:8px;z-index:9999;background:rgba(0,0,0,0.75);color:#0f0;font:11px monospace;padding:6px 8px;border-radius:4px;white-space:pre;pointer-events:none;';
+  document.body.appendChild(debugEl);
+}
+
 let lenis; // assigned synchronously below; onReady only fires later, asynchronously
 lenis = initScrubber({
   proxyOnly: reduceMotion || saveData || slowConnection,
@@ -36,5 +47,9 @@ lenis = initScrubber({
     root.classList.remove('is-loading');
     lenis.start();
     preloader.addEventListener('transitionend', () => preloader.remove(), { once: true });
+  },
+  onDebug: (d) => {
+    if (!debugEl) return;
+    debugEl.textContent = `path: ${d.path}\ntick: ${d.tickMs}ms\nring: ${d.ringSize}\ninFlight: ${d.inFlight}\ncapacity: ${d.capacity}\nvelocity: ${d.velocity}`;
   },
 });

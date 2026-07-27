@@ -9,6 +9,8 @@ let ctx = null;
 let vw = 0;
 let vh = 0;
 let dpr = 1;
+let debug = false;
+let lastDebugPost = 0;
 const fadeState = { lastKey: null, lastImg: null, lastDims: null, from: null, fromDims: null, startTs: 0 };
 
 self.onmessage = (e) => {
@@ -22,6 +24,7 @@ self.onmessage = (e) => {
     dpr = msg.dpr;
     applyCanvasSize(canvas, ctx, vw, vh, dpr);
 
+    debug = !!msg.debug;
     engine = createFrameEngine({ tier: msg.tier, proxyOnly: msg.proxyOnly });
     engine
       .loadSpine((loaded, total) => postMessage({ type: 'spineProgress', loaded, total }))
@@ -42,8 +45,17 @@ self.onmessage = (e) => {
   }
 
   if (msg.type === 'tick') {
+    const t0 = debug ? performance.now() : 0;
     engine.update(msg.p, msg.dt);
     const frame = engine.get(msg.p);
     drawFrame(ctx, vw, vh, frame, engine.velocity, fadeState);
+    if (debug) {
+      const tickMs = performance.now() - t0;
+      const now = performance.now();
+      if (now - lastDebugPost > 400) {
+        lastDebugPost = now;
+        postMessage({ type: 'debug', tickMs: Math.round(tickMs), ...engine.debugInfo });
+      }
+    }
   }
 };
