@@ -1,3 +1,5 @@
+import { supportsWebCodecs, loadVideoTrack, createVideoRing } from './video-source.js';
+
 // Isomorphic frame source + painter — no `window`/`document`/`Image` access,
 // so this same module runs unchanged inside a Worker (paint via OffscreenCanvas)
 // or on the main thread (fallback for browsers without
@@ -16,7 +18,11 @@
 // mobile only sustained ~4 fetched-frames/sec, well short of what real-time
 // scrolling needs, while 1600x900 sustains ~5-6 fps. `id` still distinguishes
 // desktop/mobile for tuning ring size / concurrency / DPR beyond resolution.
-const SHARP_COUNT = 527;
+// Thinned from the source's 527 frames to 264 (every other frame): halves
+// required fetch+decode throughput, which measurement showed was the actual
+// bottleneck on constrained connections (not paint/scheduling). The
+// proxy->sharp crossfade already covers the larger per-step visual jump.
+const SHARP_COUNT = 264;
 const PROXY_COUNT = 176;
 
 const RING_CAP = { desktop: 48, mobile: 36 };
@@ -45,8 +51,8 @@ const FADE_MAX_VELOCITY = 0.75; // frames/sec — near-total-stop only
 
 export function tierFor(width) {
   return width >= 1024
-    ? { id: 'desktop', dir: '1080p', width: 1920, height: 1080 }
-    : { id: 'mobile', dir: '1600p', width: 1600, height: 900 };
+    ? { id: 'desktop', dir: '1080p', width: 1920, height: 1080, video: '/frames/1080p.mp4' }
+    : { id: 'mobile', dir: '1600p', width: 1600, height: 900, video: '/frames/1600p.mp4' };
 }
 
 const pad3 = (i) => String(i).padStart(3, '0');
@@ -57,16 +63,28 @@ async function fetchBitmap(url, signal) {
   const res = await fetch(url, { signal });
   if (!res.ok) throw new Error('bad status');
   const blob = await res.blob();
-  return createImageBitmap(blob);
+  const bitmap = await createImageBitmap(blob);
+  return { bitmap, bytes: blob.size };
 }
+
+// Average sharp-frame size measured from the actual built tiers (13MB/264
+// frames desktop, 9.5MB/264 mobile) x a 20fps sustain target — the minimum
+// arrival rate that doesn't read as choppy. `saveData` (checked by the
+// caller) only catches users who opted into Data Saver; it misses Safari/iOS
+// (no Network Information API at all) and ordinary-but-slow connections. This
+// measures the proxy spine's actual download speed as a connection-API-free
+// fallback signal for those cases.
+const SHARP_KBPS_FOR_SMOOTH = { desktop: 50 * 20, mobile: 37 * 20 };
 
 export function createFrameEngine({ tier, proxyOnly = false }) {
   const proxyImgs = new Array(PROXY_COUNT);
+  let forcedProxyOnly = proxyOnly;
 
-  let ring = new Map(); // index -> { bitmap, ts }
+  let ring = new Map(); // index -> { bitmap, ts } — bitmap is an ImageBitmap (WebP path) or VideoFrame (video path); both share close()
   let inFlight = new Map(); // index -> AbortController
   let lastEvict = 0;
   const readyCbs = [];
+  let videoRing = null; // non-null once the WebCodecs video path is active for the current tier
 
   let prevIndex = 1;
   let vFrames = 0; // EMA-smoothed signed frames/sec
@@ -82,12 +100,15 @@ export function createFrameEngine({ tier, proxyOnly = false }) {
   function loadSpine(onProgress) {
     const BAIL_MS = 8000;
     let done = 0;
+    let totalBytes = 0;
+    const t0 = performance.now();
     const jobs = [];
     for (let i = 1; i <= PROXY_COUNT; i++) {
       jobs.push(
         fetchBitmap(proxyPath(i))
-          .then((bitmap) => {
+          .then(({ bitmap, bytes }) => {
             proxyImgs[i - 1] = bitmap;
+            totalBytes += bytes;
           })
           .catch(() => {})
           .finally(() => {
@@ -96,16 +117,38 @@ export function createFrameEngine({ tier, proxyOnly = false }) {
           })
       );
     }
-    return Promise.race([Promise.all(jobs), new Promise((r) => setTimeout(r, BAIL_MS))]);
+    return Promise.race([Promise.all(jobs), new Promise((r) => setTimeout(r, BAIL_MS))]).then(() => {
+      if (forcedProxyOnly) return; // already decided (reduced-motion / saveData) — nothing to measure for
+      const elapsed = (performance.now() - t0) / 1000;
+      if (elapsed < 0.05 || totalBytes === 0) return; // too fast/small to trust the measurement
+      const kbps = totalBytes / 1024 / elapsed;
+      if (kbps < SHARP_KBPS_FOR_SMOOTH[tier.id]) forcedProxyOnly = true;
+    });
+  }
+
+  // The video path replaces per-frame WebP fetches with a single small H.264
+  // file, hardware-decoded — see video-source.js for why. Feature-detected
+  // with a silent catch: any failure (unsupported codec config, network
+  // error) just leaves videoRing null, and every call site below already
+  // falls back to the proven per-frame WebP path whenever it's null.
+  function startVideoSource() {
+    if (forcedProxyOnly || !supportsWebCodecs() || !tier.video) return Promise.resolve();
+    return loadVideoTrack(tier.video)
+      .then((track) => {
+        videoRing = createVideoRing({ track, ring, ringCap: RING_CAP[tier.id] });
+      })
+      .catch(() => {
+        videoRing = null;
+      });
   }
 
   async function fetchSharp(index) {
-    if (proxyOnly || ring.has(index) || inFlight.has(index)) return;
+    if (forcedProxyOnly || ring.has(index) || inFlight.has(index)) return;
     const controller = new AbortController();
     inFlight.set(index, controller);
     const t0 = performance.now();
     try {
-      const bitmap = await fetchBitmap(sharpPath(tier.dir, index), controller.signal);
+      const { bitmap } = await fetchBitmap(sharpPath(tier.dir, index), controller.signal);
       const dt = (performance.now() - t0) / 1000;
       if (dt > 0.001) capacity = capacity * 0.7 + (1 / dt) * 0.3;
       ring.set(index, { bitmap, ts: performance.now() });
@@ -139,22 +182,37 @@ export function createFrameEngine({ tier, proxyOnly = false }) {
   }
 
   function primeWindow(onProgress) {
-    if (proxyOnly) return Promise.resolve();
+    if (forcedProxyOnly) return Promise.resolve();
     const idx = sharpIndexFor(0);
     const lo = Math.max(1, idx - FETCH_BEHIND);
     const hi = Math.min(SHARP_COUNT, idx + MIN_AHEAD);
-    const total = hi - lo + 1;
-    let done = 0;
-    const jobs = [];
-    for (let i = lo; i <= hi; i++) {
-      jobs.push(
-        fetchSharp(i).then(() => {
-          done++;
-          onProgress?.(done, total);
-        })
-      );
-    }
-    return Promise.race([Promise.all(jobs), new Promise((r) => setTimeout(r, 6000))]);
+
+    return startVideoSource().then(() => {
+      if (videoRing) {
+        onProgress?.(0, 1);
+        videoRing.ensure(lo, hi, idx);
+        // flush() can legitimately reject (AbortError) if the playhead moves
+        // enough before it resolves to trigger a reseek — priming is
+        // best-effort polish either way, so treat that the same as timing out.
+        return Promise.race([videoRing.flush(), new Promise((r) => setTimeout(r, 6000))])
+          .catch(() => {})
+          .then(() => {
+            onProgress?.(1, 1);
+          });
+      }
+      const total = hi - lo + 1;
+      let done = 0;
+      const jobs = [];
+      for (let i = lo; i <= hi; i++) {
+        jobs.push(
+          fetchSharp(i).then(() => {
+            done++;
+            onProgress?.(done, total);
+          })
+        );
+      }
+      return Promise.race([Promise.all(jobs), new Promise((r) => setTimeout(r, 6000))]);
+    });
   }
 
   function update(p, dt) {
@@ -164,7 +222,7 @@ export function createFrameEngine({ tier, proxyOnly = false }) {
       vFrames = vFrames * 0.75 + instV * 0.25;
     }
     prevIndex = idx;
-    if (proxyOnly) return;
+    if (forcedProxyOnly) return;
 
     const absV = Math.abs(vFrames);
     let stride = 1;
@@ -179,6 +237,12 @@ export function createFrameEngine({ tier, proxyOnly = false }) {
     const hi = Math.min(SHARP_COUNT, idx + (dir > 0 ? ahead : FETCH_BEHIND));
     const keepLo = lo - HYSTERESIS_GAP;
     const keepHi = hi + HYSTERESIS_GAP;
+
+    if (videoRing) {
+      videoRing.ensure(lo, hi, idx);
+      evict(keepLo, keepHi);
+      return;
+    }
 
     for (const [i, controller] of inFlight) {
       if (i < keepLo || i > keepHi) {
@@ -203,7 +267,7 @@ export function createFrameEngine({ tier, proxyOnly = false }) {
 
   function get(p) {
     const idx = sharpIndexFor(p);
-    if (!proxyOnly) {
+    if (!forcedProxyOnly) {
       if (ring.has(idx)) return { img: ring.get(idx).bitmap, isSharp: true, index: idx };
       for (let d = 1; d <= 8; d++) {
         const behind = idx - d;
@@ -222,8 +286,10 @@ export function createFrameEngine({ tier, proxyOnly = false }) {
 
   let switching = false;
   function setTier(next) {
-    if (proxyOnly || switching || next.id === tier.id) return;
+    if (forcedProxyOnly || switching || next.id === tier.id) return;
     switching = true;
+    if (videoRing) videoRing.destroy(); // closes its own ring entries + decoder
+    videoRing = null;
     const oldRing = ring;
     ring = new Map();
     for (const controller of inFlight.values()) controller.abort();
@@ -259,8 +325,10 @@ export function drawFrame(ctx, vw, vh, frame, velocity, fadeState) {
   const { img, isSharp, index } = frame;
   if (!img) return;
 
-  const srcW = img.width;
-  const srcH = img.height;
+  // VideoFrame (the WebCodecs path) exposes displayWidth/displayHeight rather
+  // than width/height like ImageBitmap — this keeps both drawable uniformly.
+  const srcW = img.displayWidth ?? img.width;
+  const srcH = img.displayHeight ?? img.height;
   const scale = Math.max(vw / srcW, vh / srcH);
   const dw = srcW * scale;
   const dh = srcH * scale;

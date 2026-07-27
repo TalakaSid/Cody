@@ -19,10 +19,11 @@ function setProgress(p) {
 // run proxy-only — smaller, instant, and the site still fully works.
 const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 const saveData = navigator.connection?.saveData === true;
+const slowConnection = /2g/.test(navigator.connection?.effectiveType || '');
 
 let lenis; // assigned synchronously below; onReady only fires later, asynchronously
 lenis = initScrubber({
-  proxyOnly: reduceMotion || saveData,
+  proxyOnly: reduceMotion || saveData || slowConnection,
   // The proxy spine is the primary gate (0-70%): once it's in, every scroll
   // position has something correct to show, even if the sharp ring is empty.
   onSpineProgress: (loaded, total) => setProgress((loaded / total) * 0.7),
